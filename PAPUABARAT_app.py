@@ -47,7 +47,7 @@ def process_data(uploaded_file):
 if uploaded_file:
     data = process_data(uploaded_file)
 else:
-    data = process_data("PAPUABARAT.xlsx")
+    data = process_data("PAPUABARAT2.xlsx")
 
 # Sidebar: Pilih Tanggal
 st.sidebar.header("📅 Filter Tanggal")
@@ -96,4 +96,5 @@ with st.expander("📁 Lihat dan Unduh Data Lengkap"):
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
         data.to_excel(writer, sheet_name='Hasil DSS', index=False)
         writer.close()
+
     st.download_button(label="Unduh Excel", data=buffer.getvalue(), file_name="hasil_dss_iklim.xlsx", mime="application/vnd.ms-excel")
