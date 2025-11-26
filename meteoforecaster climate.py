@@ -5,15 +5,20 @@ import plotly.express as px
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score
+import os
 
 # Judul Dashboard
 st.title("🌦️ Prediksi Iklim Papua Barat (Tanpa Upload Data)")
 st.write("Dashboard otomatis menggunakan data historis Papua Barat.")
 
+# Debug info (bisa dihapus)
+st.write("📁 Current Directory:", os.getcwd())
+st.write("📄 Files:", os.listdir())
+
 # ==========================================
-# 0. LOAD DATA FIXED (TANPA UPLOAD)
+# 0. LOAD DATA FIXED
 # ==========================================
-DATA_PATH = "data_papua_barat.xlsx"
+DATA_PATH = "PAPUABARAT2.xlsx"
 
 try:
     df = pd.read_excel(DATA_PATH, sheet_name='Data Harian - Table')
@@ -171,6 +176,4 @@ try:
     )
 
 except FileNotFoundError:
-    st.error("❌ File data belum ditemukan.\n\nPastikan file **data_papua_barat.xlsx** ada di folder aplikasi.")
-
-
+    st.error("❌ File data belum ditemukan.\n\nPastikan file **PAPUABARAT2.xlsx** ada di folder aplikasi.")
