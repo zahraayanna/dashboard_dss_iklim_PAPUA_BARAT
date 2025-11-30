@@ -9,40 +9,16 @@ from datetime import datetime, timedelta
 import os
 
 # ---------- CONFIG ----------
-st.set_page_config(page_title="DSS Iklim - Papua Barat", layout="wide", page_icon="🌦️")
+st.set_page_config(page_title="DSS Iklim - Papua Barat", layout="wide")
+st.title("🌦️ Decision Support System Iklim — Papua Barat")
+st.markdown(
+    "Dashboard prediksi & analisis iklim. Data akan otomatis dimuat dari file lokal `PAPUABARAT2.xlsx` "
+    "jika tersedia; jika tidak aplikasi mencoba fallback ke `data_yapen.csv` atau membuat data contoh."
+)
 
-# small CSS to make UI nicer
-st.markdown("""
-<style>
-.header-title {
-    text-align: center;
-    color: #0B6E99;
-    font-size: 30px;
-    font-weight: 700;
-    margin-bottom: 0;
-}
-.header-sub {
-    text-align: center;
-    color: #2b4f62;
-    margin-top: 4px;
-    margin-bottom: 12px;
-}
-.card {
-    background: #FFFFFF;
-    border-radius: 10px;
-    padding: 12px;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.08);
-}
-.small-muted { color: #6b7a86; font-size:13px;}
-</style>
-""", unsafe_allow_html=True)
-
-st.markdown("<div class='header-title'>🌦️ Decision Support System Iklim — Papua Barat</div>", unsafe_allow_html=True)
-st.markdown("<div class='header-sub'>Analisis & prediksi cuaca lengkap: curah hujan, temperatur, risiko kekeringan, hujan ekstrem, dan indeks cuaca.</div>", unsafe_allow_html=True)
-
-# ---------- DATA PATH (using your PAPUABARAT2.xlsx by default) ----------
+# preferensi file: utamakan xlsx PAPUABARAT2.xlsx, fallback ke data_yapen.csv
 LOCAL_XLSX_PATH = "PAPUABARAT2.xlsx"
-LOCAL_CSV_PATH = "data_yapen.csv"  # backward-compatible if you ever use csv
+LOCAL_CSV_PATH = "data_yapen.csv"
 
 # ---------- DSS helper functions ----------
 def klasifikasi_cuaca(ch, matahari):
@@ -57,6 +33,7 @@ def klasifikasi_cuaca(ch, matahari):
 
 
 def risiko_kekeringan_score(ch, matahari):
+    # score 0..1, higher = higher drought risk
     ch_clamped = np.clip(ch, 0, 200)
     matahari_clamped = np.clip(matahari, 0, 16)
     score = (1 - (ch_clamped / 200)) * 0.7 + (matahari_clamped / 16) * 0.3
@@ -78,18 +55,12 @@ def hujan_ekstrem_flag(ch, threshold=50):
 
 
 def compute_weather_index(df):
+    # Composite index 0..1 from rainfall, temp stress, humidity stress, wind
     eps = 1e-6
-    # ensure columns exist
-    if 'curah_hujan' not in df.columns: df['curah_hujan'] = 0
-    if 'Tavg' not in df.columns and 'Tn' in df.columns: df['Tavg'] = df['Tn']
-    if 'Tavg' not in df.columns: df['Tavg'] = 0
-    if 'kelembaban' not in df.columns: df['kelembaban'] = 0
-    if 'kecepatan_angin' not in df.columns: df['kecepatan_angin'] = 0
-
     r = df['curah_hujan'].fillna(0).astype(float).values
     r_norm = (r - r.min()) / (r.max() - r.min() + eps)
 
-    t = df['Tavg'].fillna(0).astype(float).values
+    t = df['Tavg'].fillna(df.get('Tn', df['Tavg'])).astype(float).values
     comfy_low, comfy_high = 24, 28
     t_dist = np.maximum(0, np.maximum(comfy_low - t, t - comfy_high))
     t_norm = (t_dist - t_dist.min()) / (t_dist.max() - t_dist.min() + eps)
@@ -108,21 +79,26 @@ def compute_weather_index(df):
 # ---------- Data loading ----------
 @st.cache_data(show_spinner=False)
 def load_data():
-    # Priority: PAPUABARAT2.xlsx (your file) -> data_yapen.csv -> generate sample
+    # Try XLSX first (PAPUABARAT2.xlsx), then CSV, else generate sample
     if os.path.exists(LOCAL_XLSX_PATH):
         try:
-            df = pd.read_excel(LOCAL_XLSX_PATH, sheet_name=0)
+            # try reading sheet named 'Data Harian - Table' first, else sheet 0
+            try:
+                df = pd.read_excel(LOCAL_XLSX_PATH, sheet_name="Data Harian - Table")
+            except Exception:
+                df = pd.read_excel(LOCAL_XLSX_PATH, sheet_name=0)
             st.sidebar.success(f"Loaded local Excel: {LOCAL_XLSX_PATH}")
             return df
         except Exception as e:
-            st.sidebar.error(f"Gagal baca {LOCAL_XLSX_PATH}: {e}")
+            st.sidebar.error(f"Gagal membaca {LOCAL_XLSX_PATH}: {e}")
+
     if os.path.exists(LOCAL_CSV_PATH):
         try:
             df = pd.read_csv(LOCAL_CSV_PATH, parse_dates=['Tanggal'])
             st.sidebar.success(f"Loaded local CSV: {LOCAL_CSV_PATH}")
             return df
         except Exception as e:
-            st.sidebar.error(f"Gagal baca {LOCAL_CSV_PATH}: {e}")
+            st.sidebar.error(f"Gagal membaca {LOCAL_CSV_PATH}: {e}")
 
     # fallback: generate sample 2-year daily data
     st.sidebar.info("File dataset tidak ditemukan — membuat data contoh 2 tahun.")
@@ -143,38 +119,35 @@ def load_data():
     })
     return df
 
+
 # Load
 data = load_data()
 
-# Ensure proper dtypes and fill missing numeric columns
+# Ensure types & fill NAs
 data['Tanggal'] = pd.to_datetime(data['Tanggal'], errors='coerce')
 for col in ['curah_hujan', 'Tn', 'Tx', 'Tavg', 'kelembaban', 'matahari', 'kecepatan_angin']:
     if col not in data.columns:
         data[col] = 0
     data[col] = pd.to_numeric(data[col], errors='coerce').fillna(0)
 
-# ---------- SIDEBAR ----------
-with st.sidebar:
-    st.header("⚙️ Pengaturan Tampilan & Analisis")
-    st.write("Dataset:", "PAPUABARAT2.xlsx (prioritas) / data_yapen.csv (fallback)")
-    extreme_threshold = st.number_input("Ambang Hujan Ekstrem (mm/hari)", value=50, min_value=1)
-    risk_high = st.slider("Ambang Risiko Tinggi (score 0..1)", min_value=0.0, max_value=1.0, value=0.6, step=0.01)
-    risk_med = st.slider("Ambang Risiko Sedang (score 0..1)", min_value=0.0, max_value=1.0, value=0.3, step=0.01)
-    ma_window = st.slider("Moving average window (hari)", min_value=1, max_value=60, value=7)
-    st.markdown("---")
-    st.header("📅 Filter Data")
-    min_date = data['Tanggal'].min().date()
-    max_date = data['Tanggal'].max().date()
-    date_range = st.date_input("Rentang tanggal", value=(min_date, max_date), min_value=min_date, max_value=max_date)
-    if 'Wilayah' in data.columns:
-        regions = ['All'] + sorted(data['Wilayah'].unique().tolist())
-        region = st.selectbox("Pilih Wilayah", regions)
-    else:
-        region = None
-    st.markdown("---")
-    st.caption("Ingin tampilan mirip temanmu? Kamu bisa tambahkan .streamlit/config.toml untuk tema.")
+# Sidebar controls
+st.sidebar.header("⚙️ Pengaturan")
+extreme_threshold = st.sidebar.number_input("Ambang Hujan Ekstrem (mm/hari)", value=50, min_value=1)
+risk_high = st.sidebar.slider("Ambang Risiko Tinggi (score 0..1)", min_value=0.0, max_value=1.0, value=0.6, step=0.01)
+risk_med = st.sidebar.slider("Ambang Risiko Sedang (score 0..1)", min_value=0.0, max_value=1.0, value=0.3, step=0.01)
+ma_window = st.sidebar.slider("Moving average window (hari)", min_value=1, max_value=60, value=7)
 
-# ---------- FILTER & PREPARE ----------
+# Filters
+st.sidebar.header("📅 Filter data")
+min_date = data['Tanggal'].min().date()
+max_date = data['Tanggal'].max().date()
+date_range = st.sidebar.date_input("Rentang tanggal", value=(min_date, max_date), min_value=min_date, max_value=max_date)
+
+region = None
+if 'Wilayah' in data.columns:
+    regions = ['All'] + sorted(data['Wilayah'].unique().tolist())
+    region = st.sidebar.selectbox("Pilih Wilayah", regions)
+
 start_date, end_date = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
 mask = (data['Tanggal'] >= start_date) & (data['Tanggal'] <= end_date)
 if region and region != 'All':
@@ -184,7 +157,7 @@ if df.empty:
     st.warning("Tidak ada data pada rentang/wilayah yang dipilih — menampilkan seluruh dataset.")
     df = data.copy()
 
-# Derived fields (keep all features)
+# Derived fields
 df['Prediksi Cuaca'] = df.apply(lambda r: klasifikasi_cuaca(r['curah_hujan'], r['matahari']), axis=1)
 df['Hujan Ekstrem'] = df['curah_hujan'].apply(lambda x: "Ya" if x > extreme_threshold else "Tidak")
 df['extreme_flag'] = df['curah_hujan'].apply(lambda x: hujan_ekstrem_flag(x, threshold=extreme_threshold))
@@ -194,7 +167,7 @@ df['WeatherIndex'] = compute_weather_index(df)
 df['Year'] = df['Tanggal'].dt.year
 df['Month'] = df['Tanggal'].dt.month
 
-# ---------- TOP METRICS ----------
+# Top metrics
 st.markdown("---")
 st.subheader("Ringkasan Cepat")
 c1, c2, c3, c4 = st.columns(4)
@@ -209,16 +182,17 @@ st.header("1. Prediksi Curah Hujan (Rainfall Forecast)")
 r1, r2 = st.columns([2, 1])
 with r1:
     fig_rain_line = px.line(df, x='Tanggal', y='curah_hujan', title="Rainfall (Line Chart)")
-    fig_rain_line.update_layout(yaxis_title="mm", xaxis_title="Tanggal", template="plotly_white")
+    fig_rain_line.update_layout(yaxis_title="mm", xaxis_title="Tanggal")
     st.plotly_chart(fig_rain_line, use_container_width=True)
 
-    fig_rain_area = px.area(df, x='Tanggal', y='curah_hujan', title="Rainfall (Area Chart)", template="plotly_white")
+    fig_rain_area = px.area(df, x='Tanggal', y='curah_hujan', title="Rainfall (Area Chart)")
     st.plotly_chart(fig_rain_area, use_container_width=True)
 
 with r2:
-    st.markdown("<div class='card'><b>Kegunaan</b><br>- Identifikasi musim hujan & potensi banjir.<br>- Gunakan untuk perencanaan tanggap darurat.</div>", unsafe_allow_html=True)
+    st.write("**Kegunaan:**")
+    st.write("- Identifikasi musim hujan & potensi banjir.")
     monthly_sum = df.set_index('Tanggal').resample('M')['curah_hujan'].sum().reset_index()
-    fig_month_bar = px.bar(monthly_sum, x='Tanggal', y='curah_hujan', title="Monthly Rainfall Sum", template="plotly_white")
+    fig_month_bar = px.bar(monthly_sum, x='Tanggal', y='curah_hujan', title="Monthly Rainfall Sum")
     st.plotly_chart(fig_month_bar, use_container_width=True)
 
 # ---------------- 2. Temperature Forecast ----------------
@@ -226,8 +200,9 @@ st.markdown("---")
 st.header("2. Prediksi Hari Panas / Temperatur (Temperature Forecast)")
 t1, t2 = st.columns([2, 1])
 with t1:
-    temp_cols = [c for c in ['Tn','Tavg','Tx'] if c in df.columns]
-    fig_temp = px.line(df, x='Tanggal', y=temp_cols, labels={'value': 'Temperature (°C)'}, title="Temperature Trends", template="plotly_white")
+    temp_cols = [c for c in ['Tn', 'Tavg', 'Tx'] if c in df.columns]
+    fig_temp = px.line(df, x='Tanggal', y=temp_cols, labels={'value': 'Temperature (°C)'},
+                       title="Temperature Trends (Tn, Tavg, Tx)")
     st.plotly_chart(fig_temp, use_container_width=True)
 
     # Heatmap month x day of average Tavg (if range long enough)
@@ -237,18 +212,20 @@ with t1:
         heat_df['MonthName'] = heat_df['Tanggal'].dt.strftime('%b')
         pivot = heat_df.pivot_table(index='MonthName', columns='Day', values='Tavg', aggfunc='mean')
         if pivot.shape[0] > 0 and pivot.shape[1] > 0:
-            fig_heat = px.imshow(pivot, labels=dict(x='Day', y='Month', color='Tavg'), title="Temperature Heatmap (Month x Day)", template="plotly_white")
+            fig_heat = px.imshow(pivot, labels=dict(x='Day', y='Month', color='Tavg'),
+                                 title="Temperature Heatmap (Month x Day)")
             st.plotly_chart(fig_heat, use_container_width=True)
 
 with t2:
-    st.markdown("<div class='card'><b>Kegunaan</b><br>- Deteksi gelombang panas, perbandingan rata-rata suhu.</div>", unsafe_allow_html=True)
+    st.write("**Kegunaan:**")
+    st.write("- Deteksi gelombang panas, perbandingan suhu rata-rata per periode.")
 
 # ---------------- 3. Prediksi Risiko Kekeringan ----------------
 st.markdown("---")
 st.header("3. Prediksi Risiko Kekeringan")
 d1, d2 = st.columns([2, 1])
 with d1:
-    latest_score = df['RiskScore'].mean() if 'RiskScore' in df.columns else 0
+    latest_score = df['RiskScore'].mean()
     gauge = go.Figure(go.Indicator(
         mode="gauge+number",
         value=latest_score,
@@ -269,16 +246,17 @@ with d1:
 
     if 'Wilayah' in df.columns:
         by_region = df.groupby('Wilayah')['RiskScore'].mean().reset_index().sort_values('RiskScore', ascending=False)
-        fig_bar_region = px.bar(by_region, x='Wilayah', y='RiskScore', title="Average RiskScore per Wilayah", template="plotly_white")
+        fig_bar_region = px.bar(by_region, x='Wilayah', y='RiskScore', title="Average RiskScore per Wilayah")
         st.plotly_chart(fig_bar_region, use_container_width=True)
 
     df['Risk_MA'] = df['RiskScore'].rolling(window=ma_window).mean()
-    fig_risk_line = px.line(df, x='Tanggal', y='RiskScore', title="Risk Score Over Time", template="plotly_white")
+    fig_risk_line = px.line(df, x='Tanggal', y='RiskScore', title="Risk Score Over Time")
     fig_risk_line.add_scatter(x=df['Tanggal'], y=df['Risk_MA'], mode='lines', name=f'MA({ma_window})')
     st.plotly_chart(fig_risk_line, use_container_width=True)
 
 with d2:
-    st.markdown("<div class='card'><b>Kegunaan</b><br>- Visual mudah memahami ambang risiko; ubah threshold di sidebar.</div>", unsafe_allow_html=True)
+    st.write("**Kegunaan:**")
+    st.write("- Visual mudah memahami ambang risiko; ubah threshold di sidebar untuk sensitivitas.")
 
 # ---------------- 4. Prediksi Hujan Ekstrem ----------------
 st.markdown("---")
@@ -288,20 +266,22 @@ with e1:
     freq = df[df['Hujan Ekstrem'] == 'Ya'].groupby(df['Tanggal'].dt.to_period('M')).size().reset_index(name='count')
     if not freq.empty:
         freq['Tanggal'] = freq['Tanggal'].dt.to_timestamp()
-        fig_freq = px.bar(freq, x='Tanggal', y='count', title="Frekuensi Hujan Ekstrem per Bulan", template="plotly_white")
+        fig_freq = px.bar(freq, x='Tanggal', y='count', title="Frekuensi Hujan Ekstrem per Bulan")
         st.plotly_chart(fig_freq, use_container_width=True)
     else:
         st.info("Tidak ada kejadian hujan ekstrem pada rentang ini.")
 
-    fig_scatter = px.scatter(df, x='Tanggal', y='curah_hujan', color='Hujan Ekstrem', title="Curah Hujan vs Waktu (Scatter)", template="plotly_white")
+    fig_scatter = px.scatter(df, x='Tanggal', y='curah_hujan', color='Hujan Ekstrem',
+                             title="Curah Hujan vs Waktu (Scatter)")
     st.plotly_chart(fig_scatter, use_container_width=True)
 
     df['extreme_prob_30d'] = df['extreme_flag'].rolling(window=30, min_periods=1).mean()
-    fig_prob = px.line(df, x='Tanggal', y='extreme_prob_30d', title="Rolling 30-day Probability of Extreme Rain", template="plotly_white")
+    fig_prob = px.line(df, x='Tanggal', y='extreme_prob_30d', title="Rolling 30-day Probability of Extreme Rain")
     st.plotly_chart(fig_prob, use_container_width=True)
 
 with e2:
-    st.markdown("<div class='card'><b>Kegunaan</b><br>- Deteksi dini risiko banjir berdasarkan anomali curah hujan.</div>", unsafe_allow_html=True)
+    st.write("**Kegunaan:**")
+    st.write("- Deteksi (> threshold) untuk peringatan dini banjir. Ubah threshold di sidebar.")
 
 # ---------------- 5. Weather Index (composite) ----------------
 st.markdown("---")
@@ -314,25 +294,23 @@ with w1:
         'hum_stress': (np.maximum(0, np.maximum(40 - df['kelembaban'], df['kelembaban'] - 70))),
         'wind': (df['kecepatan_angin'] - df['kecepatan_angin'].min()) / (df['kecepatan_angin'].max() - df['kecepatan_angin'].min() + 1e-6)
     })
-
     for col in ['temp_stress', 'hum_stress']:
         comp[col] = (comp[col] - comp[col].min()) / (comp[col].max() - comp[col].min() + 1e-6)
-
     avg_comp = comp.mean()
     cats = ['Rain', 'TempStress', 'HumStress', 'Wind']
     vals = avg_comp.values.tolist()
     vals += vals[:1]
-
     fig_radar = go.Figure(data=go.Scatterpolar(r=vals, theta=cats + [cats[0]], fill='toself', name='AvgComponents'))
-    fig_radar.update_layout(polar=dict(radialaxis=dict(range=[0, 1])), showlegend=False, title="Weather Index Components (Radar)")
+    fig_radar.update_layout(polar=dict(radialaxis=dict(range=[0, 1])), showlegend=False,
+                            title="Weather Index Components (Radar)")
     st.plotly_chart(fig_radar, use_container_width=True)
 
-    if 'WeatherIndex' in df.columns:
-        fig_index = px.line(df, x='Tanggal', y='WeatherIndex', title="Composite Weather Index Over Time", template="plotly_white")
-        st.plotly_chart(fig_index, use_container_width=True)
+    fig_index = px.line(df, x='Tanggal', y='WeatherIndex', title="Composite Weather Index Over Time")
+    st.plotly_chart(fig_index, use_container_width=True)
 
 with w2:
-    st.markdown("<div class='card'><b>Kegunaan</b><br>- Skor 0–1 untuk kondisi iklim; komponen membantu interpretasi.</div>", unsafe_allow_html=True)
+    st.write("**Kegunaan:**")
+    st.write("- Skor 0–1 untuk kondisi iklim keseluruhan; komponen membantu interpretasi.")
 
 # ---------------- 6. Tren Bulanan/Tahunan ----------------
 st.markdown("---")
@@ -344,14 +322,14 @@ with m1:
     for y in years:
         tmp = df[df['Year'] == y].copy()
         monthly = tmp.groupby(tmp['Tanggal'].dt.month)['curah_hujan'].mean().reset_index(name='curah_hujan')
-        # use month number on x
+        # month numbers as x
         fig_multi.add_trace(go.Scatter(x=monthly['Tanggal'], y=monthly['curah_hujan'], mode='lines+markers', name=str(y)))
     fig_multi.update_layout(title="Monthly Average Rainfall by Year", xaxis_title="Month", yaxis_title="Rain (mm)")
     st.plotly_chart(fig_multi, use_container_width=True)
 
 with m2:
     df['Rain_MA'] = df['curah_hujan'].rolling(window=ma_window).mean()
-    fig_ma = px.line(df, x='Tanggal', y=['curah_hujan', 'Rain_MA'], title=f"Moving Average Rainfall (window={ma_window})", template="plotly_white")
+    fig_ma = px.line(df, x='Tanggal', y=['curah_hujan', 'Rain_MA'], title=f"Moving Average Rainfall (window={ma_window})")
     st.plotly_chart(fig_ma, use_container_width=True)
 
 # ---------------- 7. Prediksi Anomali Iklim ----------------
@@ -359,27 +337,25 @@ st.markdown("---")
 st.header("7. Prediksi Anomali Iklim")
 a1, a2 = st.columns([2, 1])
 with a1:
-    if 'Tavg' in data.columns:
-        baseline_temp = data.groupby(data['Tanggal'].dt.month)['Tavg'].mean()
-        df['baseline_Tavg'] = df['Tanggal'].dt.month.map(baseline_temp)
-        df['Tavg_anom'] = df['Tavg'] - df['baseline_Tavg']
+    baseline_temp = data.groupby(data['Tanggal'].dt.month)['Tavg'].mean()
+    df['baseline_Tavg'] = df['Tanggal'].dt.month.map(baseline_temp)
+    df['Tavg_anom'] = df['Tavg'] - df['baseline_Tavg']
 
-        anom_pivot = df.pivot_table(index=df['Tanggal'].dt.year, columns=df['Tanggal'].dt.month, values='Tavg_anom', aggfunc='mean')
-        if anom_pivot.shape[0] > 0 and anom_pivot.shape[1] > 0:
-            fig_anom = px.imshow(anom_pivot, labels=dict(x='Month', y='Year', color='Tavg anomaly'),
-                                 title="Temperature Anomaly (Year x Month)", template="plotly_white")
-            st.plotly_chart(fig_anom, use_container_width=True)
+    anom_pivot = df.pivot_table(index=df['Tanggal'].dt.year, columns=df['Tanggal'].dt.month, values='Tavg_anom', aggfunc='mean')
+    if anom_pivot.shape[0] > 0 and anom_pivot.shape[1] > 0:
+        fig_anom = px.imshow(anom_pivot, labels=dict(x='Month', y='Year', color='Tavg anomaly'),
+                             title="Temperature Anomaly (Year x Month)")
+        st.plotly_chart(fig_anom, use_container_width=True)
 
-        fig_anom_line = go.Figure()
-        fig_anom_line.add_trace(go.Scatter(x=df['Tanggal'], y=df['Tavg'], mode='lines', name='Tavg'))
-        fig_anom_line.add_trace(go.Scatter(x=df['Tanggal'], y=df['baseline_Tavg'], mode='lines', name='Baseline (monthly mean)'))
-        fig_anom_line.update_layout(title="Temperature with Baseline Comparison")
-        st.plotly_chart(fig_anom_line, use_container_width=True)
-    else:
-        st.info("Kolom Tavg tidak tersedia pada dataset; anomali tidak dapat dihitung.")
+    fig_anom_line = go.Figure()
+    fig_anom_line.add_trace(go.Scatter(x=df['Tanggal'], y=df['Tavg'], mode='lines', name='Tavg'))
+    fig_anom_line.add_trace(go.Scatter(x=df['Tanggal'], y=df['baseline_Tavg'], mode='lines', name='Baseline (monthly mean)'))
+    fig_anom_line.update_layout(title="Temperature with Baseline Comparison")
+    st.plotly_chart(fig_anom_line, use_container_width=True)
 
 with a2:
-    st.markdown("<div class='card'><b>Kegunaan</b><br>- Mendeteksi pergeseran iklim terhadap baseline musiman.</div>", unsafe_allow_html=True)
+    st.write("**Kegunaan:**")
+    st.write("- Deteksi pergeseran iklim terhadap baseline musiman.")
 
 # ---------------- Data viewer & Export ----------------
 st.markdown("---")
@@ -390,7 +366,9 @@ with st.expander("📁 Lihat dan Unduh Data Lengkap"):
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
         df.to_excel(writer, sheet_name='Hasil_DSS', index=False)
 
+    # move buffer pointer to start
     buffer.seek(0)
+
     st.download_button(
         "Unduh Excel Hasil Analisis",
         data=buffer.getvalue(),
